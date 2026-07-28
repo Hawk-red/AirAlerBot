@@ -358,6 +358,11 @@ async def main():
 
     logger.info(f"Успешно подключено! Мониторинг канала @{channel_username} запущен.")
     logger.info(f"Список отслеживаемых ключевых слов: {keywords}")
+    try:
+        send_telegram_bot_message_to_all("🟢 <b>Бот запущено</b>\nМоніторинг тривог активний.", config)
+        logger.info("Стартовое уведомление отправлено подписчикам.")
+    except Exception as e:
+        logger.error(f"Не вдалося надіслати стартове повідомлення: {e}")
     
     # Ожидание новых сообщений
     await client.run_until_disconnected()
