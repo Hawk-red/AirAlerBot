@@ -114,11 +114,41 @@ def send_telegram_bot_message_to_all(text, config):
     return success_count > 0
 
 def check_message_match(text, keywords):
+    # Оставлено для совместимости (старая логика)
     text_lower = text.lower()
     for kw in keywords:
         if kw.lower() in text_lower:
             return kw
     return None
+
+def should_forward(text, config):
+    """Гибридный фильтр 3-строгий. Возвращает (пересылать?, причина)."""
+    t = text.lower()
+    cities = config.get('cities', [])
+    fast = config.get('fast_threats', [])
+    slow = config.get('slow_threats', [])
+    national = config.get('national', [])
+    all_clear = config.get('all_clear', [])
+
+    hit = [k for k in all_clear if k in t]
+    if hit:
+        return True, f"відбій: {', '.join(hit)}"
+    hit = [k for k in cities if k in t]
+    if hit:
+        return True, f"моє місто: {', '.join(hit)}"
+    hit = [k for k in fast if k in t]
+    if hit:
+        return True, f"швидка загроза: {', '.join(hit)}"
+    hit = [k for k in national if k in t]
+    if hit:
+        return True, f"загальнонаціональна: {', '.join(hit)}"
+    slow_hit = [k for k in slow if k in t]
+    if slow_hit:
+        near = [k for k in cities if k in t]
+        if near:
+            return True, f"дрон + моє місто: {', '.join(slow_hit)}"
+        return False, f"дрон далеко: {', '.join(slow_hit)}"
+    return False, "не в фокусі"
 
 def test_bot_connection(config):
     logger.info("Запуск теста подключения Telegram-бота к подписчикам...")
@@ -310,9 +340,9 @@ async def main():
             
         logger.info(f"Новое сообщение в канале {channel_username}: {message_text[:60]}...")
         
-        matched_keyword = check_message_match(message_text, keywords)
-        if matched_keyword:
-            logger.warning(f"ОБНАРУЖЕНО СОВПАДЕНИЕ (ключ: {matched_keyword}): {message_text}")
+        should_send, match_reason = should_forward(message_text, config)
+        if should_send:
+            logger.warning(f"ОБНАРУЖЕНО СОВПАДЕНИЕ ({match_reason}): {message_text}")
             
             # Формируем красивое сообщение
             alert_text = (
