@@ -1,0 +1,20 @@
+[Unit]
+Description=Telegram Air Alert Monitor Service
+After=network.target
+
+[Service]
+Type=simple
+# Укажите пользователя, под которым будет работать скрипт
+User=hawk
+# Путь к папке со скриптом на сервере
+WorkingDirectory=/opt/alert_monitor
+# Путь к интерпретатору python3 в виртуальном окружении и скрипту
+ExecStart=/opt/alert_monitor/venv/bin/python3 main.py
+# Перезапускать службу в случае падения
+Restart=always
+# Задержка перед перезапуском
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,22 @@
+# Секреты — НЕ коммитим токены!
+config.json
+
+# Сессия Telethon (авторизация)
+*.session
+*.session-journal
+
+# Логи
+*.log
+
+# Подписчики (данные)
+subscribers.json
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Бэкапы
+*.bak
+*.bak_*
+config.json.bak_*

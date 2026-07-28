@@ -1,0 +1,20 @@
+{
+    "telegram_api_id": 0,
+    "telegram_api_hash": "YOUR_API_HASH",
+    "bot_token": "YOUR_BOT_TOKEN",
+    "chat_id": 0,
+    "monitored_channel": "kpszsu",
+    "keywords": [
+        "київ",
+        "києв",
+        "київщ",
+        "київськ",
+        "київськи",
+        "бровар",
+        "борисп",
+        "васильк",
+        "ірпін",
+        "обухів",
+        "вишгород"
+    ]
+}
