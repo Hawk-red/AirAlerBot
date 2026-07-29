@@ -388,14 +388,16 @@ async def main():
             )
             
             # Отправляем через бота всем подписчикам
-            send_telegram_bot_message_to_all(alert_text, config)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, send_telegram_bot_message_to_all, alert_text, config)
         else:
             logger.info("Сообщение проигнорировано (нет ключевых слов для Киева/области).")
 
     logger.info(f"Успешно подключено! Мониторинг канала @{channel_username} запущен.")
     logger.info(f"Список отслеживаемых ключевых слов: {keywords}")
     try:
-        send_telegram_bot_message_to_all("🟢 <b>Бот запущен</b>\nМониторинг тревог активен.", config)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, send_telegram_bot_message_to_all, "🟢 <b>Бот запущен</b>\nМониторинг тревог активен.", config)
         logger.info("Стартовое уведомление отправлено подписчикам.")
     except Exception as e:
         logger.error(f"Не вдалося надіслати стартове повідомлення: {e}")
