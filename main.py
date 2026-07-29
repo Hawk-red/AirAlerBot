@@ -122,32 +122,46 @@ def check_message_match(text, keywords):
     return None
 
 def should_forward(text, config):
-    """Гибридный фильтр 3-строгий. Возвращает (пересылать?, причина)."""
+    """Фильтр Путь Б: города всегда, балистика/ракеты кроме далёкого региона/направления,
+    дроны только с городом, відбій только по своему городу."""
     t = text.lower()
-    cities = config.get('cities', [])
-    fast = config.get('fast_threats', [])
-    slow = config.get('slow_threats', [])
-    national = config.get('national', [])
-    all_clear = config.get('all_clear', [])
+    cities      = config.get('cities', [])
+    fast        = config.get('fast_threats', [])
+    slow        = config.get('slow_threats', [])
+    national    = config.get('national', [])
+    all_clear   = config.get('all_clear', [])
+    far_regions = config.get('far_regions', [])
+    far_dirs    = config.get('far_directions', [])
 
-    hit = [k for k in all_clear if k in t]
-    if hit:
-        return True, f"відбій: {', '.join(hit)}"
-    hit = [k for k in cities if k in t]
-    if hit:
-        return True, f"моє місто: {', '.join(hit)}"
-    hit = [k for k in fast if k in t]
-    if hit:
-        return True, f"швидка загроза: {', '.join(hit)}"
-    hit = [k for k in national if k in t]
-    if hit:
-        return True, f"загальнонаціональна: {', '.join(hit)}"
+    city_hit = [k for k in cities if k in t]
+    far_hit  = [k for k in far_regions if k in t]
+    dir_hit  = [k for k in far_dirs if k in t]
+
+    # ВІДБІЙ — только если мой город упомянут
+    if any(k in t for k in all_clear):
+        if city_hit:
+            return True, f"відбій ({','.join(city_hit)})"
+        return False, "відбій не мій регіон"
+
+    # 1. Мой город → всегда (приоритет над далёкими регионами)
+    if city_hit:
+        return True, f"моє місто: {','.join(city_hit)}"
+    # 2. Общенациональное → всегда
+    nat_hit = [k for k in national if k in t]
+    if nat_hit:
+        return True, "загальнонаціональна"
+    # 3. Быстрые угрозы (балистика/ракеты) — всегда, кроме далёкого региона/направления
+    fast_hit = [k for k in fast if k in t]
+    if fast_hit:
+        if far_hit:
+            return False, f"швидка, далекий регіон ({','.join(far_hit)})"
+        if dir_hit:
+            return False, f"швидка, далекий напрямок ({','.join(dir_hit)})"
+        return True, f"швидка загроза: {','.join(fast_hit)}"
+    # 4. Дроны — только если мой город (уже проверен выше, города нет → пропуск)
     slow_hit = [k for k in slow if k in t]
     if slow_hit:
-        near = [k for k in cities if k in t]
-        if near:
-            return True, f"дрон + моє місто: {', '.join(slow_hit)}"
-        return False, f"дрон далеко: {', '.join(slow_hit)}"
+        return False, f"дрон далеко: {','.join(slow_hit)}"
     return False, "не в фокусі"
 
 def test_bot_connection(config):
@@ -359,7 +373,7 @@ async def main():
     logger.info(f"Успешно подключено! Мониторинг канала @{channel_username} запущен.")
     logger.info(f"Список отслеживаемых ключевых слов: {keywords}")
     try:
-        send_telegram_bot_message_to_all("🟢 <b>Бот запущено</b>\nМоніторинг тривог активний.", config)
+        send_telegram_bot_message_to_all("🟢 <b>Бот запущен</b>\nМониторинг тревог активен.", config)
         logger.info("Стартовое уведомление отправлено подписчикам.")
     except Exception as e:
         logger.error(f"Не вдалося надіслати стартове повідомлення: {e}")
