@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import asyncio
 import urllib.request
 import urllib.parse
@@ -11,15 +12,15 @@ from telethon import TelegramClient, events
 from telethon.tl.functions.channels import JoinChannelRequest
 
 # Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('alert_monitor.log', encoding='utf-8')
-    ]
-)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+_fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+_fh = RotatingFileHandler('alert_monitor.log', maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+_fh.setFormatter(_fmt)
+_sh = logging.StreamHandler(sys.stdout)
+_sh.setFormatter(_fmt)
+logger.addHandler(_fh)
+logger.addHandler(_sh)
 
 CONFIG_PATH = 'config.json'
 
