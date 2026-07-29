@@ -274,7 +274,28 @@ async def poll_bot_updates(config):
                                 method='POST'
                             )
                             await loop.run_in_executor(None, lambda: urllib.request.urlopen(req_send, timeout=5).read())
-                            
+                    elif text.startswith("/test"):
+                        sample = text[5:].strip()
+                        if not sample:
+                            reply_text = "Використання: /test &lt;текст повідомлення&gt;\nПриклад: /test Ракети на Київ"
+                        else:
+                            fwd, reason = should_forward(sample, config)
+                            status = "✅ ПЕРЕШЛЕ" if fwd else "❌ ПРОПУСТИТЬ"
+                            reply_text = f"{status}\nПричина: {reason}"
+                        url_send = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                        payload = {
+                            "chat_id": chat_id,
+                            "text": reply_text,
+                            "parse_mode": "HTML"
+                        }
+                        data_send = json.dumps(payload).encode('utf-8')
+                        req_send = urllib.request.Request(
+                            url_send, data=data_send,
+                            headers={'Content-Type': 'application/json'},
+                            method='POST'
+                        )
+                        await loop.run_in_executor(None, lambda: urllib.request.urlopen(req_send, timeout=5).read())
+
         except Exception as e:
             logger.error(f"Ошибка в цикле фонового опроса бота: {e}")
             
