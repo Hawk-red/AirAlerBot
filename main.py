@@ -8,6 +8,7 @@ import asyncio
 import urllib.request
 import urllib.parse
 import urllib.error
+from datetime import datetime, timezone
 from telethon import TelegramClient, events
 from telethon.tl.functions.channels import JoinChannelRequest
 
@@ -36,6 +37,7 @@ def load_config():
         sys.exit(1)
 
 SUBSCRIBERS_PATH = 'subscribers.json'
+LAST_ID_PATH = '/opt/alert_monitor/last_id.txt'
 subscribers = set()
 
 def load_subscribers(config):
@@ -301,6 +303,88 @@ async def poll_bot_updates(config):
             
         await asyncio.sleep(3)
 
+async def poll_channel(client, channel_entity, channel_username, config):
+    # Загружаем или инициализируем last_id
+    if os.path.exists(LAST_ID_PATH):
+        try:
+            with open(LAST_ID_PATH) as f:
+                last_id = int(f.read().strip())
+            logger.info(f"[poll] Старт с last_id={last_id}")
+        except Exception as e:
+            logger.warning(f"[poll] Не удалось прочитать last_id, начинаем с 0: {e}")
+            last_id = 0
+    else:
+        # Первый запуск — берём текущий последний id, бэклог не шлём
+        try:
+            msgs = await client.get_messages(channel_entity, limit=1)
+            last_id = msgs[0].id if msgs else 0
+        except Exception as e:
+            logger.warning(f"[poll] Не удалось получить начальный id: {e}")
+            last_id = 0
+        try:
+            with open(LAST_ID_PATH, 'w') as f:
+                f.write(str(last_id))
+        except Exception as e:
+            logger.warning(f"[poll] Не удалось сохранить начальный last_id: {e}")
+        logger.info(f"[poll] Первый запуск, стартовый last_id={last_id}, бэклог не отправляем")
+
+    logger.info(f"[poll] Опрос канала @{channel_username} каждые 20 сек запущен")
+
+    while True:
+        try:
+            msgs = await client.get_messages(channel_entity, min_id=last_id, limit=50)
+            if msgs:
+                for msg in reversed(msgs):  # хронологический порядок (старые → новые)
+                    if not msg.message:
+                        last_id = max(last_id, msg.id)
+                        continue
+
+                    pub = msg.date.astimezone()
+                    now = datetime.now(pub.tzinfo)
+                    lag = (now - pub).total_seconds()
+                    logger.info(f"⏱ [poll] Публикация: {pub:%H:%M:%S} | Получено: {now:%H:%M:%S} | Задержка: {lag:.1f} сек")
+
+                    should_send, match_reason = should_forward(msg.message, config)
+                    if should_send:
+                        logger.warning(f"[poll] СОВПАДЕНИЕ ({match_reason}): {msg.message}")
+
+                        if "відбій" in match_reason:
+                            reason_ru = "Отбой для Киева/области"
+                        elif "загальнонаціональна" in match_reason:
+                            reason_ru = "Угроза по всей Украине"
+                        elif "швидка загроза" in match_reason:
+                            reason_ru = "Быстрая угроза — баллистика/ракеты"
+                        elif "моє місто" in match_reason:
+                            reason_ru = "Упоминается Киев/область"
+                        else:
+                            reason_ru = match_reason
+
+                        alert_text = (
+                            f"🚨 <b>Киев / область — угроза</b> 🚨\n\n"
+                            f"{msg.message}\n\n"
+                            f"📍 Причина: {reason_ru}\n"
+                            f"🔗 <a href='https://t.me/{channel_username}/{msg.id}'>Источник</a>"
+                        )
+                        loop = asyncio.get_running_loop()
+                        await loop.run_in_executor(None, send_telegram_bot_message_to_all, alert_text, config)
+                    else:
+                        logger.info(f"[poll] Пропущено: {msg.message[:60]}")
+
+                    last_id = max(last_id, msg.id)
+
+                # Сохраняем last_id после обработки пачки
+                try:
+                    with open(LAST_ID_PATH, 'w') as f:
+                        f.write(str(last_id))
+                except Exception as e:
+                    logger.warning(f"[poll] Не удалось сохранить last_id: {e}")
+
+        except Exception as e:
+            logger.error(f"[poll] Ошибка опроса канала: {e}")
+
+        await asyncio.sleep(20)
+
+
 async def main():
     # Проверка аргументов командной строки для тестирования
     config = load_config()
@@ -373,25 +457,25 @@ async def main():
         message_text = event.message.message
         if not message_text:
             return
-            
+
+        pub = event.message.date.astimezone()
+        now = datetime.now(pub.tzinfo)
+        lag = (now - pub).total_seconds()
+        logger.info(f"⏱ Публикация: {pub:%H:%M:%S} | Получено: {now:%H:%M:%S} | Задержка: {lag:.1f} сек")
+        if lag < 0 or lag > 300:
+            logger.warning(f"⚠️ Аномальная задержка {lag:.1f} сек — проверить часы/сеть")
         logger.info(f"Новое сообщение в канале {channel_username}: {message_text[:60]}...")
-        
+
+        # push-обработчик оставлен только для диагностики задержки;
+        # отправка перенесена в poll_channel
         should_send, match_reason = should_forward(message_text, config)
         if should_send:
-            logger.warning(f"ОБНАРУЖЕНО СОВПАДЕНИЕ ({match_reason}): {message_text}")
-            
-            # Формируем красивое сообщение
-            alert_text = (
-                f"🚨 <b>КИЇВ / ОБЛАСТЬ (Увага!)</b> 🚨\n\n"
-                f"{message_text}\n\n"
-                f"🔗 <a href='https://t.me/{channel_username}/{event.message.id}'>Оригінал повідомлення</a>"
-            )
-            
-            # Отправляем через бота всем подписчикам
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, send_telegram_bot_message_to_all, alert_text, config)
+            logger.info(f"[push-диагностика] совпадение ({match_reason}) — отправка через poll_channel")
         else:
-            logger.info("Сообщение проигнорировано (нет ключевых слов для Киева/области).")
+            logger.info("[push-диагностика] сообщение не в фокусе")
+
+    # Активный опрос канала каждые 20 сек — источник истины для отправки уведомлений
+    asyncio.create_task(poll_channel(client, channel_entity, channel_username, config))
 
     logger.info(f"Успешно подключено! Мониторинг канала @{channel_username} запущен.")
     logger.info(f"Список отслеживаемых ключевых слов: {keywords}")
