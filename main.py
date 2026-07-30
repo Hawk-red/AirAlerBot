@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, timezone
 from telethon import TelegramClient, events
+from telethon.errors import FloodWaitError
 from telethon.tl.functions.channels import JoinChannelRequest
 
 # Настройка логирования
@@ -185,6 +186,28 @@ def test_filter(text, config):
     else:
         print("❌ Совпадений не найдено.")
 
+def translate_to_ru(text):
+    try:
+        params = urllib.parse.urlencode({
+            'client': 'gtx',
+            'sl': 'uk',
+            'tl': 'ru',
+            'dt': 't',
+            'q': text,
+        })
+        url = f"https://translate.googleapis.com/translate_a/single?{params}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        translated = ''.join(seg[0] for seg in data[0] if seg[0])
+        if not translated.strip():
+            raise ValueError("пустой ответ")
+        return translated
+    except Exception as e:
+        logger.warning(f"[translate] fallback на оригинал: {e}")
+        return text
+
+
 async def poll_bot_updates(config):
     bot_token = config.get("bot_token")
     if not bot_token:
@@ -328,11 +351,16 @@ async def poll_channel(client, channel_entity, channel_username, config):
             logger.warning(f"[poll] Не удалось сохранить начальный last_id: {e}")
         logger.info(f"[poll] Первый запуск, стартовый last_id={last_id}, бэклог не отправляем")
 
-    logger.info(f"[poll] Опрос канала @{channel_username} каждые 20 сек запущен")
+    logger.info(f"[poll] Опрос канала @{channel_username} каждые 7 сек запущен")
 
     while True:
         try:
-            msgs = await client.get_messages(channel_entity, min_id=last_id, limit=50)
+            try:
+                msgs = await client.get_messages(channel_entity, min_id=last_id, limit=50)
+            except FloodWaitError as fw:
+                logger.warning(f"[poll] FloodWait: Telegram просит подождать {fw.seconds} сек")
+                await asyncio.sleep(fw.seconds + 1)
+                continue
             if msgs:
                 for msg in reversed(msgs):  # хронологический порядок (старые → новые)
                     if not msg.message:
@@ -364,13 +392,16 @@ async def poll_channel(client, channel_entity, channel_username, config):
                             title     = "⚠️ <b>Внимание</b>"
                             reason_ru = match_reason
 
+                        loop = asyncio.get_running_loop()
+                        translated = await loop.run_in_executor(None, translate_to_ru, msg.message)
+
                         alert_text = (
                             f"{title}\n\n"
-                            f"{msg.message}\n\n"
+                            f"{translated}\n"
+                            f"<i>🔤 автоперевод</i>\n\n"
                             f"📍 Причина: {reason_ru}\n"
                             f"🔗 <a href='https://t.me/{channel_username}/{msg.id}'>Источник</a>"
                         )
-                        loop = asyncio.get_running_loop()
                         await loop.run_in_executor(None, send_telegram_bot_message_to_all, alert_text, config)
                     else:
                         logger.info(f"[poll] Пропущено: {msg.message[:60]}")
@@ -387,7 +418,7 @@ async def poll_channel(client, channel_entity, channel_username, config):
         except Exception as e:
             logger.error(f"[poll] Ошибка опроса канала: {e}")
 
-        await asyncio.sleep(20)
+        await asyncio.sleep(7)
 
 
 async def main():
