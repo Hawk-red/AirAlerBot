@@ -349,18 +349,23 @@ async def poll_channel(client, channel_entity, channel_username, config):
                         logger.warning(f"[poll] СОВПАДЕНИЕ ({match_reason}): {msg.message}")
 
                         if "відбій" in match_reason:
+                            title     = "🟢 <b>Отбой — Киев/область</b>"
                             reason_ru = "Отбой для Киева/области"
+                        elif "моє місто" in match_reason:
+                            title     = "🚨 <b>Киев / область — угроза</b> 🚨"
+                            reason_ru = "Упоминается Киев/область"
                         elif "загальнонаціональна" in match_reason:
+                            title     = "🚨 <b>Тревога по всей Украине</b> 🚨"
                             reason_ru = "Угроза по всей Украине"
                         elif "швидка загроза" in match_reason:
+                            title     = "🚀 <b>Пуски ракет — возможная угроза</b>"
                             reason_ru = "Быстрая угроза — баллистика/ракеты"
-                        elif "моє місто" in match_reason:
-                            reason_ru = "Упоминается Киев/область"
                         else:
+                            title     = "⚠️ <b>Внимание</b>"
                             reason_ru = match_reason
 
                         alert_text = (
-                            f"🚨 <b>Киев / область — угроза</b> 🚨\n\n"
+                            f"{title}\n\n"
                             f"{msg.message}\n\n"
                             f"📍 Причина: {reason_ru}\n"
                             f"🔗 <a href='https://t.me/{channel_username}/{msg.id}'>Источник</a>"
