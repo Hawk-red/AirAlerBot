@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import re
 import sys
 import json
 import logging
@@ -380,8 +381,24 @@ async def poll_channel(client, channel_entity, channel_username, config):
                             title     = "🟢 <b>Отбой — Киев/область</b>"
                             reason_ru = "Отбой для Киева/области"
                         elif "моє місто" in match_reason:
-                            title     = "🚨 <b>Киев / область — угроза</b> 🚨"
-                            reason_ru = "Упоминается Киев/область"
+                            txt = msg.message.lower()
+                            city_explicit = re.search(r'\bки[їіє]в(а|у|і|ом)?\b', txt)
+                            oblast_markers = ("київщ", "київська обл", "київської обл",
+                                              "бровар", "борисп", "васильк", "ірпін",
+                                              "обухів", "вишгород", "фастів", "буча", "гостомел")
+                            has_oblast = any(m in txt for m in oblast_markers)
+                            if city_explicit:
+                                title     = "🚨 <b>Угроза в Киеве</b> 🚨"
+                                reason_ru = "Упоминается Киев"
+                            elif has_oblast:
+                                title     = "🚨 <b>Угроза: Киевская область</b> 🚨"
+                                reason_ru = "Упоминается Киевская область"
+                            elif re.search(r'ки[їіє]в', txt):
+                                title     = "🚨 <b>Угроза в Киеве</b> 🚨"
+                                reason_ru = "Упоминается Киев"
+                            else:
+                                title     = "🚨 <b>Угроза: Киев и область</b> 🚨"
+                                reason_ru = "Упоминается Киев/область"
                         elif "загальнонаціональна" in match_reason:
                             title     = "🚨 <b>Тревога по всей Украине</b> 🚨"
                             reason_ru = "Угроза по всей Украине"
@@ -397,8 +414,7 @@ async def poll_channel(client, channel_entity, channel_username, config):
 
                         alert_text = (
                             f"{title}\n\n"
-                            f"{translated}\n"
-                            f"<i>🔤 автоперевод</i>\n\n"
+                            f"{translated}\n\n"
                             f"📍 Причина: {reason_ru}\n"
                             f"🔗 <a href='https://t.me/{channel_username}/{msg.id}'>Источник</a>"
                         )
