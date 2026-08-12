@@ -383,11 +383,17 @@ async def poll_channel(client, channel_entity, channel_username, config):
                         elif "моє місто" in match_reason:
                             txt = msg.message.lower()
                             city_explicit = re.search(r'\bки[їіє]в(а|у|і|ом)?\b', txt)
+                            rocket_markers = ("балістичн", "ракетн", "ракета", "ракети",
+                                              "крилат", "аеробаліст")
+                            is_rocket = any(m in txt for m in rocket_markers)
                             oblast_markers = ("київщ", "київська обл", "київської обл",
                                               "бровар", "борисп", "васильк", "ірпін",
                                               "обухів", "вишгород", "фастів", "буча", "гостомел")
                             has_oblast = any(m in txt for m in oblast_markers)
-                            if city_explicit:
+                            if city_explicit and is_rocket:
+                                title     = "🚨 🚀 <b>РАКЕТА НА КИЕВ — В УКРЫТИЕ!</b> ‼️"
+                                reason_ru = "Ракета на Киев"
+                            elif city_explicit:
                                 title     = "🚨 <b>Угроза в Киеве</b> 🚨"
                                 reason_ru = "Упоминается Киев"
                             elif has_oblast:
@@ -403,8 +409,8 @@ async def poll_channel(client, channel_entity, channel_username, config):
                             title     = "🚨 <b>Тревога по всей Украине</b> 🚨"
                             reason_ru = "Угроза по всей Украине"
                         elif "швидка загроза" in match_reason:
-                            title     = "🚀 <b>Пуски ракет — возможная угроза</b>"
-                            reason_ru = "Быстрая угроза — баллистика/ракеты"
+                            title     = "⚠️ <b>Возможная угроза — пуски ракет</b>"
+                            reason_ru = "Быстрая угроза — баллистика или ракеты"
                         else:
                             title     = "⚠️ <b>Внимание</b>"
                             reason_ru = match_reason
