@@ -11,6 +11,9 @@ config.json
 # Подписчики (данные)
 subscribers.json
 
+# Runtime-состояние (ID последнего обработанного сообщения)
+last_id.txt
+
 # Python
 venv/
 __pycache__/
