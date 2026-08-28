@@ -141,12 +141,26 @@ def should_forward(text, config):
     city_hit = [k for k in cities if k in t]
     far_hit  = [k for k in far_regions if k in t]
     dir_hit  = [k for k in far_dirs if k in t]
+    # фильтр дронов 2026-08-28: fast_hit/slow_hit нужны раньше, до city_hit
+    fast_hit = [k for k in fast if k in t]
+    slow_hit = [k for k in slow if k in t]
 
     # ВІДБІЙ — только если мой город упомянут
     if any(k in t for k in all_clear):
         if city_hit:
             return True, f"відбій ({','.join(city_hit)})"
         return False, "відбій не мій регіон"
+
+    # --- фильтр дронов 2026-08-28: дрон без ракетных слов шлём тільки якщо в
+    # тексті є саме місто Київ (word-boundary regex), а не Київщина/пригороди
+    # (cities містить підрядки 'київщ','бровар','борисп' і т.п., які інакше
+    # перехоплюють дрон на кроці "1. Мій город" нижче) ---
+    if slow_hit and not fast_hit:
+        is_kyiv_city = bool(re.search(r'\bки[їіє]в(а|у|і|ом)?\b', t))
+        if is_kyiv_city:
+            return True, f"дрон, місто Київ: {','.join(slow_hit)}"
+        return False, f"дрон не в місті Київ: {','.join(slow_hit)}"
+    # --- конец фильтра дронов 2026-08-28 ---
 
     # 1. Мой город → всегда (приоритет над далёкими регионами)
     if city_hit:
@@ -156,7 +170,7 @@ def should_forward(text, config):
     if nat_hit:
         return True, "загальнонаціональна"
     # 3. Быстрые угрозы (балистика/ракеты) — всегда, кроме далёкого региона/направления
-    fast_hit = [k for k in fast if k in t]
+    # было до фильтра дронов 2026-08-28: fast_hit = [k for k in fast if k in t]
     if fast_hit:
         if far_hit:
             return False, f"швидка, далекий регіон ({','.join(far_hit)})"
@@ -164,7 +178,9 @@ def should_forward(text, config):
             return False, f"швидка, далекий напрямок ({','.join(dir_hit)})"
         return True, f"швидка загроза: {','.join(fast_hit)}"
     # 4. Дроны — только если мой город (уже проверен выше, города нет → пропуск)
-    slow_hit = [k for k in slow if k in t]
+    # было до фильтра дронов 2026-08-28: slow_hit = [k for k in slow if k in t]
+    # (сюда попадаем, только если slow_hit есть вместе с fast_hit — уже не
+    #  «чистый» дрон, обрабатывается как раньше)
     if slow_hit:
         return False, f"дрон далеко: {','.join(slow_hit)}"
     return False, "не в фокусі"
