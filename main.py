@@ -118,6 +118,23 @@ def send_telegram_bot_message_to_all(text, config):
     logger.info(f"Рассылка завершена. Успешно отправлено: {success_count} из {len(current_subscribers)}")
     return success_count > 0
 
+def get_direction_arrow(t):
+    """Стрелка направления, откуда летит угроза (по тексту сообщения, lower).
+    Возвращает эмодзи-стрелку или None, если направление не найдено/неоднозначно."""
+    if re.search(r'північно-?сх[іо]д', t):
+        return '↙️'
+    if re.search(r'(південно-?сх[іо]д|північно-?зах[іо]д|південно-?зах[іо]д)', t):
+        return None
+    if re.search(r'сх[іо]д', t):
+        return '⬅️'
+    if re.search(r'зах[іо]д', t):
+        return '➡️'
+    if re.search(r'півд', t):
+        return '⬆️'
+    if re.search(r'півн', t):
+        return '⬇️'
+    return None
+
 def check_message_match(text, keywords):
     # Оставлено для совместимости (старая логика)
     text_lower = text.lower()
@@ -156,11 +173,21 @@ def should_forward(text, config):
     # (cities містить підрядки 'київщ','бровар','борисп' і т.п., які інакше
     # перехоплюють дрон на кроці "1. Мій город" нижче) ---
     if slow_hit and not fast_hit:
+        # фильтр дронов 2026-08-30: Київ как ОРИЕНТИР (східніше/західніше/
+        # північніше/південніше/повз/мимо Києва), а цель — область → глушим
+        oblast_marker_hit = [k for k in ('київщ', 'бровар', 'борисп', 'васильк',
+                                          'ірпін', 'обухів', 'вишгород', 'фастів',
+                                          'буча', 'гостомел') if k in t]
+        kyiv_as_landmark = bool(re.search(r'(схід|захід|півн|півд)\w*\s+києв', t)) \
+            or ('повз києв' in t) or ('мимо києв' in t)
+        if kyiv_as_landmark and oblast_marker_hit:
+            return False, f"дрон повз Київ на область: {','.join(oblast_marker_hit)}"
+
         is_kyiv_city = bool(re.search(r'\bки[їіє]в(а|у|і|ом)?\b', t))
         if is_kyiv_city:
             return True, f"дрон, місто Київ: {','.join(slow_hit)}"
         return False, f"дрон не в місті Київ: {','.join(slow_hit)}"
-    # --- конец фильтра дронов 2026-08-28 ---
+    # --- конец фильтра дронов 2026-08-28/30 ---
 
     # 1. Мой город → всегда (приоритет над далёкими регионами)
     if city_hit:
@@ -204,25 +231,68 @@ def test_filter(text, config):
         print("❌ Совпадений не найдено.")
 
 def translate_to_ru(text):
-    try:
-        params = urllib.parse.urlencode({
-            'client': 'gtx',
-            'sl': 'uk',
-            'tl': 'ru',
-            'dt': 't',
-            'q': text,
-        })
-        url = f"https://translate.googleapis.com/translate_a/single?{params}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        translated = ''.join(seg[0] for seg in data[0] if seg[0])
-        if not translated.strip():
-            raise ValueError("пустой ответ")
-        return translated
-    except Exception as e:
-        logger.warning(f"[translate] fallback на оригинал: {e}")
-        return text
+    """Локальная словарная замена ключевых слов (без сети).
+    Google Translate стабильно отдавал 429 (рейт-лимит), поэтому сеть убрали:
+    заменяем только известные слова/корни, остальной текст остаётся как есть
+    (украинский) — это допустимо."""
+    replacements = {
+        # Направления/ориентиры
+        'півночі': 'севера', 'північ': 'север', 'північніше': 'севернее',
+        'півдня': 'юга', 'південь': 'юг', 'південніше': 'южнее',
+        'сходу': 'востока', 'схід': 'восток', 'східніше': 'восточнее',
+        'заходу': 'запада', 'захід': 'запад', 'західніше': 'западнее',
+        'північно-схід': 'северо-восток', 'південно-схід': 'юго-восток',
+        'північно-захід': 'северо-запад', 'південно-захід': 'юго-запад',
+        # Техника/угрозы
+        'балістичн': 'баллистич', 'балістична': 'баллистическая',
+        'ракетн': 'ракетн', 'ракета': 'ракета', 'ракети': 'ракеты',
+        'крилат': 'крылат', 'крилата': 'крылатая', 'крилаті': 'крылатые',
+        'шахед': 'шахед', 'шахеди': 'шахеды',
+        'безпілотник': 'беспилотник', 'бпла': 'БпЛА', 'дрон': 'дрон',
+        'аеробаліст': 'аэробалист', 'міг': 'МиГ', 'каб': 'КАБ',
+        'реактивн': 'реактивн', 'реактивний': 'реактивный', 'реактивні': 'реактивные',
+        # Действия/слова
+        'відбій': 'отбой', 'загроза': 'угроза', 'увага': 'внимание',
+        'курсом': 'курсом', 'напрямку': 'направлении', 'напрямок': 'направление',
+        'місто': 'город', 'міста': 'города',
+        'області': 'области', 'область': 'область',
+        'повз': 'мимо', 'у напрямку': 'в направлении',
+        'застосування': 'применение', 'озброєння': 'вооружение', 'вибух': 'взрыв',
+        'тривога': 'тревога', 'група': 'группа', 'груп': 'групп', 'курс': 'курс',
+        # Города/области (падежные формы явно, чтобы не резать общий корень)
+        'київщин': 'Киевщина', 'київська': 'Киевская',
+        'києва': 'Киева', 'києву': 'Киеву', 'києві': 'Киеве', 'києвом': 'Киевом',
+        'київ': 'Киев', 'бровар': 'Бровары', 'ірпін': 'Ирпень',
+        'вишгород': 'Вышгород', 'буча': 'Буча', 'бориспіл': 'Борисполь',
+        'обухів': 'Обухов', 'васильків': 'Васильков',
+    }
+    result = text
+    for key in sorted(replacements, key=len, reverse=True):
+        result = re.sub(r'\b' + re.escape(key), replacements[key], result, flags=re.IGNORECASE)
+    return result
+
+# было: перевод через Google Translate (translate.googleapis.com), убрано
+# 2026-08-30 — эндпоинт стабильно отдавал 429 (Too Many Requests), см. диагностику.
+# def translate_to_ru_OLD_GOOGLE(text):
+#     try:
+#         params = urllib.parse.urlencode({
+#             'client': 'gtx',
+#             'sl': 'uk',
+#             'tl': 'ru',
+#             'dt': 't',
+#             'q': text,
+#         })
+#         url = f"https://translate.googleapis.com/translate_a/single?{params}"
+#         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+#         with urllib.request.urlopen(req, timeout=3) as resp:
+#             data = json.loads(resp.read().decode('utf-8'))
+#         translated = ''.join(seg[0] for seg in data[0] if seg[0])
+#         if not translated.strip():
+#             raise ValueError("пустой ответ")
+#         return translated
+#     except Exception as e:
+#         logger.warning(f"[translate] fallback на оригинал: {e}")
+#         return text
 
 
 async def poll_bot_updates(config):
@@ -393,13 +463,28 @@ async def poll_channel(client, channel_entity, channel_username, config):
                     if should_send:
                         logger.warning(f"[poll] СОВПАДЕНИЕ ({match_reason}): {msg.message}")
 
-                        if "відбій" in match_reason:
-                            title     = "🟢 <b>Отбой — Киев/область</b>"
+                        txt_lower = msg.message.lower()
+                        arrow = get_direction_arrow(txt_lower)
+
+                        # Новости/некрологи канала — нейтральный заголовок, без боевых элементов
+                        news_markers = ("посмертно", "герой україни", "орден", "звання присвоєно",
+                                        "присвоєно звання", "вічна пам",
+                                        "світла пам", "указом президента", "роковини", "річниця",
+                                        "нагородж", "медал", "честь і слава", "подвиг")
+                        is_news = any(m in txt_lower for m in news_markers)
+
+                        if is_news:
+                            title     = "📰 <b>Новость</b>"
+                            reason_ru = "Сообщение/новость канала"
+                            arrow     = None  # стрелку не ставим
+                        elif "відбій" in match_reason:
+                            title     = "🟢 <b>Отбой</b>"
                             reason_ru = "Отбой для Киева/области"
+                            arrow     = None  # к отбою направление не относится
                         elif "моє місто" in match_reason:
-                            txt = msg.message.lower()
+                            txt = txt_lower
                             city_explicit = re.search(r'\bки[їіє]в(а|у|і|ом)?\b', txt)
-                            rocket_markers = ("балістичн", "ракетн", "ракета", "ракети",
+                            rocket_markers = ("балістик", "балістичн", "ракетн", "ракета", "ракети",
                                               "крилат", "аеробаліст")
                             is_rocket = any(m in txt for m in rocket_markers)
                             oblast_markers = ("київщ", "київська обл", "київської обл",
@@ -410,26 +495,30 @@ async def poll_channel(client, channel_entity, channel_username, config):
                                 title     = "🚨 🚀 <b>РАКЕТА НА КИЕВ — В УКРЫТИЕ!</b> ‼️"
                                 reason_ru = "Ракета на Киев"
                             elif city_explicit:
-                                title     = "🚨 <b>Угроза в Киеве</b> 🚨"
+                                title     = "🚨 <b>Угроза — Киев</b>"
                                 reason_ru = "Упоминается Киев"
                             elif has_oblast:
-                                title     = "🚨 <b>Угроза: Киевская область</b> 🚨"
+                                title     = "🚨 <b>Угроза — Киевская область</b>"
                                 reason_ru = "Упоминается Киевская область"
                             elif re.search(r'ки[їіє]в', txt):
-                                title     = "🚨 <b>Угроза в Киеве</b> 🚨"
+                                title     = "🚨 <b>Угроза — Киев</b>"
                                 reason_ru = "Упоминается Киев"
                             else:
-                                title     = "🚨 <b>Угроза: Киев и область</b> 🚨"
+                                title     = "🚨 <b>Угроза — Киев</b>"
                                 reason_ru = "Упоминается Киев/область"
                         elif "загальнонаціональна" in match_reason:
-                            title     = "🚨 <b>Тревога по всей Украине</b> 🚨"
+                            title     = "🚨 <b>Тревога — вся Украина</b>"
                             reason_ru = "Угроза по всей Украине"
+                            arrow     = None  # общенациональная тревога без направления
                         elif "швидка загроза" in match_reason:
-                            title     = "⚠️ <b>Возможная угроза — пуски ракет</b>"
+                            title     = "🚀 <b>РАКЕТА</b>"
                             reason_ru = "Быстрая угроза — баллистика или ракеты"
                         else:
-                            title     = "⚠️ <b>Внимание</b>"
+                            title     = "🛸 <b>БпЛА</b>"
                             reason_ru = match_reason
+
+                        if arrow:
+                            title = f"{title} {arrow}"
 
                         loop = asyncio.get_running_loop()
                         translated = await loop.run_in_executor(None, translate_to_ru, msg.message)
