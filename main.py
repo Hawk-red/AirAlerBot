@@ -511,7 +511,13 @@ async def poll_channel(client, channel_entity, channel_username, config):
                             reason_ru = "Угроза по всей Украине"
                             arrow     = None  # общенациональная тревога без направления
                         elif "швидка загроза" in match_reason:
-                            title     = "🚀 <b>РАКЕТА</b>"
+                            threat_markers = ("загроза застосування", "можлива загроза",
+                                              "ймовірн", "загроза пуск", "ризик застосування",
+                                              "може бути застосован")
+                            if any(m in txt_lower for m in threat_markers):
+                                title     = "🚀 <b>Возможны пуски ракет</b>"
+                            else:
+                                title     = "🚀 <b>РАКЕТА</b>"
                             reason_ru = "Быстрая угроза — баллистика или ракеты"
                         else:
                             title     = "🛸 <b>БпЛА</b>"
