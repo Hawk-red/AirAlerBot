@@ -158,6 +158,10 @@ def should_forward(text, config):
     city_hit = [k for k in cities if k in t]
     far_hit  = [k for k in far_regions if k in t]
     dir_hit  = [k for k in far_dirs if k in t]
+    far_cities  = config.get('far_cities', [])
+    keep_cities = config.get('keep_cities', [])
+    far_city_hit = [k for k in far_cities if k in t]
+    keep_hit     = [k for k in keep_cities if k in t]
     # фильтр дронов 2026-08-28: fast_hit/slow_hit нужны раньше, до city_hit
     fast_hit = [k for k in fast if k in t]
     slow_hit = [k for k in slow if k in t]
@@ -203,6 +207,10 @@ def should_forward(text, config):
             return False, f"швидка, далекий регіон ({','.join(far_hit)})"
         if dir_hit:
             return False, f"швидка, далекий напрямок ({','.join(dir_hit)})"
+        # далёкий город (Кременчук и т.п.): отсекаем, только если нет пригорода/Київщини
+        # (city_hit уже перехвачен выше, но проверяем явно для безопасности)
+        if far_city_hit and not keep_hit and not city_hit:
+            return False, f"ракета далёкий город: {','.join(far_city_hit)}"
         return True, f"швидка загроза: {','.join(fast_hit)}"
     # 4. Дроны — только если мой город (уже проверен выше, города нет → пропуск)
     # было до фильтра дронов 2026-08-28: slow_hit = [k for k in slow if k in t]
@@ -514,7 +522,13 @@ async def poll_channel(client, channel_entity, channel_username, config):
                             threat_markers = ("загроза застосування", "можлива загроза",
                                               "ймовірн", "загроза пуск", "ризик застосування",
                                               "може бути застосован")
-                            if any(m in txt_lower for m in threat_markers):
+                            takeoff_markers = ("зліт", "злетів", "злетіли", "ту-95", "ту95", "ту-160",
+                                               "ту160", "ту-22", "ту22", "стратегічн",
+                                               "у разі здійснення пуск")
+                            is_takeoff = any(m in txt_lower for m in takeoff_markers)
+                            if is_takeoff:
+                                title     = "⚠️ <b>Угроза! Взлёт носителей ракет</b> 🚀"
+                            elif any(m in txt_lower for m in threat_markers):
                                 title     = "🚀 <b>Возможны пуски ракет</b>"
                             else:
                                 title     = "🚀 <b>РАКЕТА</b>"
