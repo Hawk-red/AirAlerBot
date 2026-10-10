@@ -479,7 +479,15 @@ async def poll_channel(client, channel_entity, channel_username, config):
                                         "присвоєно звання", "вічна пам",
                                         "світла пам", "указом президента", "роковини", "річниця",
                                         "нагородж", "медал", "честь і слава", "подвиг")
-                        is_news = any(m in txt_lower for m in news_markers)
+                        # статистика/звіти — новина, лише якщо в тексті немає живої загрози
+                        stats_markers = ("знищено", "знешкоджено", "за добу", "за тиждень",
+                                         "за вересень", "за жовтень", "підсумки", "статистик",
+                                         "б'ємо ворога", "самольотовильот", "літако-вильот",
+                                         "літаковильот", "вогневе ураження")
+                        live_markers = ("курсом на", "в укритт", "загроз", "на київ")
+                        is_stats = (any(m in txt_lower for m in stats_markers)
+                                    and not any(m in txt_lower for m in live_markers))
+                        is_news = is_stats or any(m in txt_lower for m in news_markers)
 
                         if is_news:
                             title     = "📰 <b>Новость</b>"
