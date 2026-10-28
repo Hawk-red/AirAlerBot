@@ -238,6 +238,18 @@ def test_filter(text, config):
     else:
         print("❌ Совпадений не найдено.")
 
+def test_title(text, config):
+    """Показать, перешлётся ли текст и с каким заголовком (ручная проверка логики)."""
+    ok, reason = should_forward(text, config)
+    if not ok:
+        print(f"❌ ПРОПУСТИТЬ — {reason}")
+        return
+    title, reason_ru = build_alert_title(text, reason)
+    print(f"✅ ПЕРЕСЛАТЬ — {reason}")
+    print(f"   Заголовок: {title}")
+    print(f"   Причина:   {reason_ru}")
+    print(f"   Тип:       {classify_message_kind(text) or 'боевое сообщение'}")
+
 def translate_to_ru(text):
     """Локальная словарная замена ключевых слов (без сети).
     Google Translate стабильно отдавал 429 (рейт-лимит), поэтому сеть убрали:
@@ -421,6 +433,131 @@ async def poll_bot_updates(config):
             
         await asyncio.sleep(3)
 
+# --- Разведение «отчёт о прошедшей атаке» vs «живая угроза» (28.10.2026) ---
+# Утренние зведення КПСЗСУ («⚡️ ЗБИТО/ПОДАВЛЕНО 257 ЦІЛЕЙ… у ніч на 27 жовтня…
+# Основний напрямок удару – Київ… станом на 09:00») уходили в критический заголовок:
+# в stats_markers не было ни одного их слова («збито», «подавлено», «у ніч на»),
+# поэтому is_news=False, а дальше ветка «моє місто» находила в тексте самой сводки
+# слово «Київ» рядом с «балістичними ракетами» → «РАКЕТА НА КИЕВ — В УКРЫТИЕ».
+# Маркеры отчёта — прошедшее время и итог. Порог 2: по логам (1421 сообщение)
+# сообщений ровно с ОДНИМ маркером не бывает вообще, а у настоящих сводок их 2-9,
+# так что порог ничего не теряет и страхует от случайной одиночной фразы.
+REPORT_MARKERS = ("у ніч на", "станом на", "за попередніми даними",
+                  "зафіксовано влучання", "напад відбивали", "тримаймо небо")
+REPORT_RE = (re.compile(r'збито\s*/\s*подавлено'),
+             re.compile(r'разом\s*[–-]\s*до перемоги'),
+             re.compile(r'напрямок удару\s*(був|–|-|:)'))
+# Живая угроза — ТОЛЬКО слова движения/пуска. «на київ» (есть в 32% сообщений канала),
+# «загроз» и «в укритт» сюда НЕ входят: они встречаются и в самих сводках
+# («основний напрямок удару – Київ», «перебувайте в укриттях» в конце отчёта).
+LIVE_MARKERS = ("курсом на", "прямує", "рухаєть", "зліт ", "злетів", "злетіли",
+                "загроза застосування", "загроза пуск", "ризик застосування",
+                "можлива загроза")
+# Новости/некрологи канала — нейтральный заголовок, без боевых элементов
+NEWS_MARKERS = ("посмертно", "герой україни", "орден", "звання присвоєно",
+                "присвоєно звання", "вічна пам",
+                "світла пам", "указом президента", "роковини", "річниця",
+                "нагородж", "медал", "честь і слава", "подвиг")
+# Месячная статистика («протягом вересня знищено…») — как и раньше, новость,
+# но тоже только если в тексте нет живой угрозы
+STATS_MARKERS = ("знищено", "знешкоджено", "за добу", "за тиждень",
+                 "за вересень", "за жовтень", "підсумки", "статистик",
+                 "б'ємо ворога", "самольотовильот", "літако-вильот",
+                 "літаковильот", "вогневе ураження")
+
+
+def classify_message_kind(text):
+    """'report' — сводка/отчёт о прошедшей атаке, 'news' — новость/месячная статистика,
+    None — обычное сообщение (идёт в боевые ветки).
+    Приоритет: живая угроза важнее статистики, поэтому слова движения/пуска снимают
+    и 'report', и 'news' по статистике (некрологи от этого не зависят)."""
+    t = text.lower()
+    live = any(m in t for m in LIVE_MARKERS)
+    hits = sum(1 for m in REPORT_MARKERS if m in t) + sum(1 for r in REPORT_RE if r.search(t))
+    if "протягом" in t and "знищено" in t:
+        hits += 1
+    if hits >= 2 and not live:
+        return "report"
+    if any(m in t for m in STATS_MARKERS) and not live:
+        return "news"
+    if any(m in t for m in NEWS_MARKERS):
+        return "news"
+    return None
+
+
+def build_alert_title(text, match_reason):
+    """Заголовок и причина для пересылаемого сообщения.
+    Вынесено из poll_channel 28.10.2026, чтобы логику можно было прогонять
+    по логам и проверять командой --test-title."""
+    txt_lower = text.lower()
+    arrow = get_direction_arrow(txt_lower)
+
+    kind = classify_message_kind(text)
+    if kind == "report":
+        title     = "📊 <b>Сводка за ночь</b>" if "у ніч на" in txt_lower else "📊 <b>Сводка</b>"
+        reason_ru = "Сводка/отчёт о прошедшей атаке"
+        arrow     = None  # к отчёту направление не относится
+    elif kind == "news":
+        title     = "📰 <b>Новость</b>"
+        reason_ru = "Сообщение/новость канала"
+        arrow     = None  # стрелку не ставим
+    elif "відбій" in match_reason:
+        title     = "🟢 <b>Отбой</b>"
+        reason_ru = "Отбой для Киева/области"
+        arrow     = None  # к отбою направление не относится
+    elif "моє місто" in match_reason:
+        txt = txt_lower
+        city_explicit = re.search(r'\bки[їіє]в(а|у|і|ом)?\b', txt)
+        rocket_markers = ("балістик", "балістичн", "ракетн", "ракета", "ракети",
+                          "крилат", "аеробаліст")
+        is_rocket = any(m in txt for m in rocket_markers)
+        oblast_markers = ("київщ", "київська обл", "київської обл",
+                          "бровар", "борисп", "васильк", "ірпін",
+                          "обухів", "вишгород", "фастів", "буча", "гостомел")
+        has_oblast = any(m in txt for m in oblast_markers)
+        if city_explicit and is_rocket:
+            title     = "🚨 🚀 <b>РАКЕТА НА КИЕВ — В УКРЫТИЕ!</b> ‼️"
+            reason_ru = "Ракета на Киев"
+        elif city_explicit:
+            title     = "🚨 <b>Угроза — Киев</b>"
+            reason_ru = "Упоминается Киев"
+        elif has_oblast:
+            title     = "🚨 <b>Угроза — Киевская область</b>"
+            reason_ru = "Упоминается Киевская область"
+        elif re.search(r'ки[їіє]в', txt):
+            title     = "🚨 <b>Угроза — Киев</b>"
+            reason_ru = "Упоминается Киев"
+        else:
+            title     = "🚨 <b>Угроза — Киев</b>"
+            reason_ru = "Упоминается Киев/область"
+    elif "загальнонаціональна" in match_reason:
+        title     = "🚨 <b>Тревога — вся Украина</b>"
+        reason_ru = "Угроза по всей Украине"
+        arrow     = None  # общенациональная тревога без направления
+    elif "швидка загроза" in match_reason:
+        threat_markers = ("загроза застосування", "можлива загроза",
+                          "ймовірн", "загроза пуск", "ризик застосування",
+                          "може бути застосован")
+        takeoff_markers = ("зліт", "злетів", "злетіли", "ту-95", "ту95", "ту-160",
+                           "ту160", "ту-22", "ту22", "стратегічн",
+                           "у разі здійснення пуск")
+        is_takeoff = any(m in txt_lower for m in takeoff_markers)
+        if is_takeoff:
+            title     = "⚠️ <b>Угроза! Взлёт носителей ракет</b> 🚀"
+        elif any(m in txt_lower for m in threat_markers):
+            title     = "🚀 <b>Возможны пуски ракет</b>"
+        else:
+            title     = "🚀 <b>РАКЕТА</b>"
+        reason_ru = "Быстрая угроза — баллистика или ракеты"
+    else:
+        title     = "🛸 <b>БпЛА</b>"
+        reason_ru = match_reason
+
+    if arrow:
+        title = f"{title} {arrow}"
+    return title, reason_ru
+
+
 async def poll_channel(client, channel_entity, channel_username, config):
     # Загружаем или инициализируем last_id
     if os.path.exists(LAST_ID_PATH):
@@ -471,82 +608,7 @@ async def poll_channel(client, channel_entity, channel_username, config):
                     if should_send:
                         logger.warning(f"[poll] СОВПАДЕНИЕ ({match_reason}): {msg.message}")
 
-                        txt_lower = msg.message.lower()
-                        arrow = get_direction_arrow(txt_lower)
-
-                        # Новости/некрологи канала — нейтральный заголовок, без боевых элементов
-                        news_markers = ("посмертно", "герой україни", "орден", "звання присвоєно",
-                                        "присвоєно звання", "вічна пам",
-                                        "світла пам", "указом президента", "роковини", "річниця",
-                                        "нагородж", "медал", "честь і слава", "подвиг")
-                        # статистика/звіти — новина, лише якщо в тексті немає живої загрози
-                        stats_markers = ("знищено", "знешкоджено", "за добу", "за тиждень",
-                                         "за вересень", "за жовтень", "підсумки", "статистик",
-                                         "б'ємо ворога", "самольотовильот", "літако-вильот",
-                                         "літаковильот", "вогневе ураження")
-                        live_markers = ("курсом на", "в укритт", "загроз", "на київ")
-                        is_stats = (any(m in txt_lower for m in stats_markers)
-                                    and not any(m in txt_lower for m in live_markers))
-                        is_news = is_stats or any(m in txt_lower for m in news_markers)
-
-                        if is_news:
-                            title     = "📰 <b>Новость</b>"
-                            reason_ru = "Сообщение/новость канала"
-                            arrow     = None  # стрелку не ставим
-                        elif "відбій" in match_reason:
-                            title     = "🟢 <b>Отбой</b>"
-                            reason_ru = "Отбой для Киева/области"
-                            arrow     = None  # к отбою направление не относится
-                        elif "моє місто" in match_reason:
-                            txt = txt_lower
-                            city_explicit = re.search(r'\bки[їіє]в(а|у|і|ом)?\b', txt)
-                            rocket_markers = ("балістик", "балістичн", "ракетн", "ракета", "ракети",
-                                              "крилат", "аеробаліст")
-                            is_rocket = any(m in txt for m in rocket_markers)
-                            oblast_markers = ("київщ", "київська обл", "київської обл",
-                                              "бровар", "борисп", "васильк", "ірпін",
-                                              "обухів", "вишгород", "фастів", "буча", "гостомел")
-                            has_oblast = any(m in txt for m in oblast_markers)
-                            if city_explicit and is_rocket:
-                                title     = "🚨 🚀 <b>РАКЕТА НА КИЕВ — В УКРЫТИЕ!</b> ‼️"
-                                reason_ru = "Ракета на Киев"
-                            elif city_explicit:
-                                title     = "🚨 <b>Угроза — Киев</b>"
-                                reason_ru = "Упоминается Киев"
-                            elif has_oblast:
-                                title     = "🚨 <b>Угроза — Киевская область</b>"
-                                reason_ru = "Упоминается Киевская область"
-                            elif re.search(r'ки[їіє]в', txt):
-                                title     = "🚨 <b>Угроза — Киев</b>"
-                                reason_ru = "Упоминается Киев"
-                            else:
-                                title     = "🚨 <b>Угроза — Киев</b>"
-                                reason_ru = "Упоминается Киев/область"
-                        elif "загальнонаціональна" in match_reason:
-                            title     = "🚨 <b>Тревога — вся Украина</b>"
-                            reason_ru = "Угроза по всей Украине"
-                            arrow     = None  # общенациональная тревога без направления
-                        elif "швидка загроза" in match_reason:
-                            threat_markers = ("загроза застосування", "можлива загроза",
-                                              "ймовірн", "загроза пуск", "ризик застосування",
-                                              "може бути застосован")
-                            takeoff_markers = ("зліт", "злетів", "злетіли", "ту-95", "ту95", "ту-160",
-                                               "ту160", "ту-22", "ту22", "стратегічн",
-                                               "у разі здійснення пуск")
-                            is_takeoff = any(m in txt_lower for m in takeoff_markers)
-                            if is_takeoff:
-                                title     = "⚠️ <b>Угроза! Взлёт носителей ракет</b> 🚀"
-                            elif any(m in txt_lower for m in threat_markers):
-                                title     = "🚀 <b>Возможны пуски ракет</b>"
-                            else:
-                                title     = "🚀 <b>РАКЕТА</b>"
-                            reason_ru = "Быстрая угроза — баллистика или ракеты"
-                        else:
-                            title     = "🛸 <b>БпЛА</b>"
-                            reason_ru = match_reason
-
-                        if arrow:
-                            title = f"{title} {arrow}"
+                        title, reason_ru = build_alert_title(msg.message, match_reason)
 
                         loop = asyncio.get_running_loop()
                         translated = await loop.run_in_executor(None, translate_to_ru, msg.message)
@@ -587,11 +649,15 @@ async def main():
         elif sys.argv[1] == '--test-filter' and len(sys.argv) > 2:
             test_filter(sys.argv[2], config)
             return
+        elif sys.argv[1] == '--test-title' and len(sys.argv) > 2:
+            test_title(sys.argv[2], config)
+            return
         else:
             print("Использование:")
             print("  python main.py                  - запуск мониторинга")
             print("  python main.py --test-bot       - отправить тестовое сообщение через бота")
             print("  python main.py --test-filter \"текст\" - проверить работу фильтра")
+            print("  python main.py --test-title \"текст\"  - показать заголовок для текста")
             return
 
     api_id = config.get("telegram_api_id")
