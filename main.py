@@ -269,6 +269,10 @@ def test_title(text, config):
     print(f"   Заголовок: {title}")
     print(f"   Причина:   {reason_ru}")
     print(f"   Тип:       {classify_message_kind(text) or 'боевое сообщение'}")
+    message = build_alert_message(title, translate_to_ru(text), reason_ru,
+                                  "https://t.me/channel/0", reason)
+    print("   --- сообщение целиком ---")
+    print(message)
 
 def translate_to_ru(text):
     """Локальная словарная замена ключевых слов (без сети).
@@ -505,6 +509,21 @@ def classify_message_kind(text):
     return None
 
 
+def build_alert_message(title, translated, reason_ru, source_url, match_reason):
+    """Тело пересылаемого сообщения (косметика 29.10.2026).
+    Отбой быстрой угрозы — одна строка; во всех сообщениях метеорит ☄️ меняем на 🚀."""
+    if "відбій швидкої" in match_reason:
+        alert_text = "🟢 <b>Отбой угрозы применения баллистического вооружения</b>"
+    else:
+        alert_text = (
+            f"{title}\n\n"
+            f"{translated}\n\n"
+            f"📍 Причина: {reason_ru}\n"
+            f"🔗 <a href='{source_url}'>Источник</a>"
+        )
+    return alert_text.replace("☄️", "🚀").replace("☄", "🚀")
+
+
 def build_alert_title(text, match_reason):
     """Заголовок и причина для пересылаемого сообщения.
     Вынесено из poll_channel 28.10.2026, чтобы логику можно было прогонять
@@ -637,11 +656,10 @@ async def poll_channel(client, channel_entity, channel_username, config):
                         loop = asyncio.get_running_loop()
                         translated = await loop.run_in_executor(None, translate_to_ru, msg.message)
 
-                        alert_text = (
-                            f"{title}\n\n"
-                            f"{translated}\n\n"
-                            f"📍 Причина: {reason_ru}\n"
-                            f"🔗 <a href='https://t.me/{channel_username}/{msg.id}'>Источник</a>"
+                        alert_text = build_alert_message(
+                            title, translated, reason_ru,
+                            f"https://t.me/{channel_username}/{msg.id}",
+                            match_reason,
                         )
                         await loop.run_in_executor(None, send_telegram_bot_message_to_all, alert_text, config)
                     else:
@@ -762,7 +780,7 @@ async def main():
     logger.info(f"Список отслеживаемых ключевых слов: {keywords}")
     try:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, send_telegram_bot_message_to_all, "🟢 <b>Бот запущен</b>\nМониторинг тревог активен.", config)
+        await loop.run_in_executor(None, send_telegram_bot_message_to_all, "📡 <b>Бот запущен</b> — мониторинг активен", config)
         logger.info("Стартовое уведомление отправлено подписчикам.")
     except Exception as e:
         logger.error(f"Не вдалося надіслати стартове повідомлення: {e}")
