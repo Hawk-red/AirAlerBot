@@ -588,7 +588,7 @@ def build_alert_title(text, match_reason):
         if is_takeoff:
             title     = "⚠️ <b>Угроза! Взлёт носителей ракет</b> 🚀"
         elif any(m in txt_lower for m in threat_markers):
-            title     = "🚀 <b>Возможны пуски ракет</b>"
+            title     = "⚠️ <b>Возможны пуски ракет</b>"
         else:
             title     = "🚀 <b>РАКЕТА</b>"
         reason_ru = "Быстрая угроза — баллистика или ракеты"
