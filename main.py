@@ -191,6 +191,13 @@ MAX_AGE_SEC = 300
 # сети. HTTP 403/400 (бот заблокирован) НЕ ретраится — подписчик отписывается.
 RETRY_DELAYS = (0.5, 2, 5)
 
+# Детектор тишины канала: @kpszsu постит по нескольку раз в час даже в
+# спокойное время, поэтому ЧАС без единого сообщения из канала = бот «жив,
+# но нем» (отвалилась userbot-сессия или сеть, а процесс active — systemd не
+# перезапустит). Тогда шлём ОДНО предупреждение владельцу, но не чаще раза в час.
+SILENCE_THRESHOLD_SEC = 3600       # час тишины → предупреждение
+SILENCE_ALERT_INTERVAL_SEC = 3600  # не повторять предупреждение чаще раза в час
+
 
 def should_forward(text, config):
     """Фильтр Путь Б: города всегда, балистика/ракеты кроме далёкого региона/направления,
@@ -663,6 +670,13 @@ async def poll_channel(client, channel_entity, channel_username, config):
 
     logger.info(f"[poll] Опрос канала @{channel_username} каждые 7 сек запущен")
 
+    # Детектор тишины: отсчёт по монотонным часам (устойчив к сдвигам системного
+    # времени). На старте считаем, что канал только что был активен, — иначе
+    # предупреждение сработало бы сразу, до первого полученного сообщения.
+    last_channel_msg_monotonic = time.monotonic()
+    last_silence_alert_monotonic = None  # когда последний раз предупреждали
+    in_silence = False                   # шлём ли сейчас «снова активен» при оживлении
+
     while True:
         try:
             try:
@@ -672,6 +686,13 @@ async def poll_channel(client, channel_entity, channel_username, config):
                 await asyncio.sleep(fw.seconds + 1)
                 continue
             if msgs:
+                # Канал прислал новые сообщения → он жив. Если до этого мы считали
+                # его молчащим и уже предупредили владельца — сообщаем, что ожил.
+                if in_silence:
+                    silent_min = int((time.monotonic() - last_channel_msg_monotonic) / 60)
+                    logger.info(f"✅ Канал снова активен после {silent_min} мин тишины")
+                    in_silence = False
+                last_channel_msg_monotonic = time.monotonic()
                 for msg in reversed(msgs):  # хронологический порядок (старые → новые)
                     if not msg.message:
                         last_id = max(last_id, msg.id)
@@ -720,6 +741,24 @@ async def poll_channel(client, channel_entity, channel_username, config):
             logger.error(f"[poll] Ошибка опроса канала: {e}")
 
         await asyncio.sleep(7)
+
+        # --- Детектор тишины (в конце каждого цикла) ---
+        # Своя обёртка try/except, чтобы сбой уведомления не ронял опрос канала.
+        try:
+            silent_sec = time.monotonic() - last_channel_msg_monotonic
+            if silent_sec > SILENCE_THRESHOLD_SEC and (
+                    last_silence_alert_monotonic is None
+                    or time.monotonic() - last_silence_alert_monotonic > SILENCE_ALERT_INTERVAL_SEC):
+                silent_min = int(silent_sec / 60)
+                logger.critical(f"⚠️ Канал молчит уже {silent_min} минут — проверить сессию/сеть")
+                warn = (f"⚠️ Бот не получает сообщений из канала уже {silent_min} мин. "
+                        f"Возможна проблема с сессией или сетью. Проверьте!")
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, send_telegram_bot_message_to_all, warn, config)
+                last_silence_alert_monotonic = time.monotonic()
+                in_silence = True
+        except Exception as e:
+            logger.error(f"[poll] Ошибка детектора тишины: {e}")
 
 
 async def main():
