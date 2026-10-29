@@ -156,6 +156,12 @@ FAST_ALL_CLEAR_MARKERS = ("балістичн", "балістик", "аероб�
                           "ту-95", "ту95", "ту-160", "ту160")
 ALL_CLEAR_MAX_LEN = 160
 
+# Сообщения старше 5 мин не рассылаются — защита от ложных тревог после
+# простоя (отключение света). 98% сообщений доходят за <10 сек, порог
+# 300 сек — с огромным запасом. По логам: 36 случаев задержки >300 сек,
+# все — после перезапусков/разрывов.
+MAX_AGE_SEC = 300
+
 
 def should_forward(text, config):
     """Фильтр Путь Б: города всегда, балистика/ракеты кроме далёкого региона/направления,
@@ -646,6 +652,13 @@ async def poll_channel(client, channel_entity, channel_username, config):
                     now = datetime.now(pub.tzinfo)
                     lag = (now - pub).total_seconds()
                     logger.info(f"⏱ [poll] Публикация: {pub:%H:%M:%S} | Получено: {now:%H:%M:%S} | Задержка: {lag:.1f} сек")
+
+                    # Отсечка устаревших: после простоя (нет света) бэклог не шлём
+                    # как живые тревоги. last_id двигаем, чтобы не зациклиться.
+                    if lag > MAX_AGE_SEC:
+                        logger.warning(f"⏳ Сообщение устарело ({lag:.0f} сек), не отправляем: {msg.message[:80]}")
+                        last_id = max(last_id, msg.id)
+                        continue
 
                     should_send, match_reason = should_forward(msg.message, config)
                     if should_send:
