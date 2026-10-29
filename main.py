@@ -5,6 +5,8 @@ import sys
 import json
 import logging
 from logging.handlers import RotatingFileHandler
+import time
+import socket
 import asyncio
 import urllib.request
 import urllib.parse
@@ -79,36 +81,57 @@ def send_telegram_bot_message_to_all(text, config):
     current_subscribers = list(subscribers)
     success_count = 0
     
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    # Сетевые ошибки, при которых повтор имеет смысл (моргнула сеть/таймаут).
+    # socket.timeout == TimeoutError в 3.10+, urllib.error.URLError — обёртка
+    # сетевых ошибок (но её подкласс HTTPError ловим ОТДЕЛЬНО выше и НЕ ретраим).
+    RETRIABLE = (socket.timeout, TimeoutError, ConnectionError, urllib.error.URLError)
+
     for cid in current_subscribers:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         payload = {
             "chat_id": cid,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True
         }
-        try:
-            data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(
-                url,
-                data=data,
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                if response.status == 200:
-                    success_count += 1
-                else:
-                    logger.error(f"Не удалось отправить пользователю {cid}: {response.status}")
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode('utf-8')
-            logger.error(f"Ошибка отправки пользователю {cid} (код {e.code}): {error_body}")
-            # Если пользователь заблокировал бота или чат не найден, удаляем его
-            if e.code in (403, 400):
-                logger.info(f"Удаление неактивного пользователя {cid} из подписок.")
-                to_remove.append(cid)
-        except Exception as e:
-            logger.error(f"Ошибка отправки пользователю {cid}: {e}")
+        data = json.dumps(payload).encode('utf-8')
+
+        # Первая попытка + до len(RETRY_DELAYS) повторов с нарастающими паузами.
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            if attempt > 0:
+                logger.warning(f"Повторная отправка подписчику {cid}, "
+                               f"попытка {attempt}/{len(RETRY_DELAYS)}: {last_err}")
+                time.sleep(RETRY_DELAYS[attempt - 1])
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=data,
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    if response.status == 200:
+                        success_count += 1
+                    else:
+                        logger.error(f"Не удалось отправить пользователю {cid}: {response.status}")
+                break  # ответ получен (200 или иной код) — повторять не нужно
+            except urllib.error.HTTPError as e:
+                # HTTP-ответ есть, сеть работает — повтор бесполезен.
+                error_body = e.read().decode('utf-8')
+                logger.error(f"Ошибка отправки пользователю {cid} (код {e.code}): {error_body}")
+                if e.code in (403, 400):
+                    logger.info(f"Удаление неактивного пользователя {cid} из подписок.")
+                    to_remove.append(cid)
+                break
+            except RETRIABLE as e:
+                last_err = e
+                if attempt == len(RETRY_DELAYS):
+                    logger.error(f"Все {len(RETRY_DELAYS) + 1} попытки отправки "
+                                 f"подписчику {cid} провалились: {e}")
+                # иначе — следующая итерация сделает паузу и повтор
+            except Exception as e:
+                logger.error(f"Ошибка отправки пользователю {cid}: {e}")
+                break
             
     if to_remove:
         for cid in to_remove:
@@ -161,6 +184,12 @@ ALL_CLEAR_MAX_LEN = 160
 # 300 сек — с огромным запасом. По логам: 36 случаев задержки >300 сек,
 # все — после перезапусков/разрывов.
 MAX_AGE_SEC = 300
+
+# Паузы (сек) перед повторными попытками отправки ОДНОМУ подписчику при
+# сетевом сбое (timeout/URLError/ConnectionError). Первая отправка + до 3
+# повторов = максимум 4 попытки. Тревога не должна теряться из-за моргнувшей
+# сети. HTTP 403/400 (бот заблокирован) НЕ ретраится — подписчик отписывается.
+RETRY_DELAYS = (0.5, 2, 5)
 
 
 def should_forward(text, config):
